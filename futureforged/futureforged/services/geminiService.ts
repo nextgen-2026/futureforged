@@ -1,110 +1,55 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GeneratedRoadmap, UserFormData, StudentType } from "../types";
 
-const apiKey = process.env.API_KEY || '';
-
-// Initialize the client
-// Note: In a real production app, you might proxy this through a backend to hide the key,
-// but for this Vercel deployment as requested, we use the env var directly.
-const ai = new GoogleGenAI({ apiKey });
+// ⚠️ IMPORTANT: If you use Vite, change this to: import.meta.env.VITE_GEMINI_API_KEY
+const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
 
 export const generateStudentRoadmap = async (
   type: StudentType,
   data: UserFormData
 ): Promise<GeneratedRoadmap> => {
+  
   if (!apiKey) {
-    throw new Error("API Key is missing. Please configure Vercel environment variables.");
+    throw new Error("API Key is missing. Check your .env file.");
   }
 
-  // Upgraded to Pro model for better reasoning on complex roadmap tasks
-  const modelId = "gemini-3-pro-preview";
-  
-  const prompt = `
-    You are an expert academic and career counselor AI named 'FutureForged'.
-    
-    User Profile:
-    - Name: ${data.name}
-    - Type: ${type} Student
-    - Current Year/Grade: ${data.year}
-    - Ambitions/Goals: ${data.goals}
+  // 👇 THIS WAS MISSING
+  const genAI = new GoogleGenerativeAI(apiKey);
 
-    Task:
-    Generate a personalized, detailed roadmap for this student to achieve their goals.
-    
-    Requirements:
-    1. Start with a personalized motivational quote using their name.
-    2. Create a step-by-step roadmap (approx 4-6 distinct phases/steps).
-    3. For EACH step, provide a list of specific, real-world URL resources (e.g., Coursera, Khan Academy, YouTube channels, official documentation, university pages) that are relevant to the goal.
-    4. Create a representative weekly schedule to help them manage time.
-    5. Include a brief security/privacy assurance note at the end addressed to the student.
-    
-    Output strictly in JSON format matching the schema provided.
-  `;
+  const model = genAI.getGenerativeModel({
+    model: "gemini-1.5-flash", // 'gemini-pro' is old. '1.5-flash' is faster and cheaper.
+    generationConfig: { responseMimeType: "application/json" } // This forces JSON output
+  });
+  
+  const prompt = `You are FutureForged, an academic counselor AI.
+
+  Student: ${data.name}, ${type} student, Year ${data.year}
+  Goals: ${data.goals}
+
+  Create a personalized roadmap.
+  Output ONLY valid JSON matching this schema:
+  {
+    "motivationalQuote": "string",
+    "steps": [{"title": "string", "description": "string", "duration": "string", "resources": [{"title": "string", "url": "string"}]}],
+    "weeklySchedule": [{"day": "string", "tasks": ["string"]}],
+    "securityNote": "string"
+  }`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: modelId,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            motivationalQuote: {
-              type: Type.STRING,
-              description: "A personalized motivational quote including the user's name.",
-            },
-            steps: {
-              type: Type.ARRAY,
-              description: "A list of roadmap phases or steps.",
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  title: { type: Type.STRING },
-                  description: { type: Type.STRING },
-                  duration: { type: Type.STRING, description: "Estimated time to complete this step" },
-                  resources: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        title: { type: Type.STRING, description: "Name of the resource website or video" },
-                        url: { type: Type.STRING, description: "Direct URL to the resource" }
-                      }
-                    }
-                  }
-                }
-              }
-            },
-            weeklySchedule: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  day: { type: Type.STRING },
-                  tasks: { 
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING }
-                  }
-                }
-              }
-            },
-            securityNote: {
-              type: Type.STRING,
-              description: "A message assuring the user about their data privacy and safe learning habits."
-            }
-          }
-        }
-      }
-    });
-
-    if (response.text) {
-      return JSON.parse(response.text) as GeneratedRoadmap;
-    } else {
-      throw new Error("No response generated from AI.");
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+    
+    // No need for regex replacement if we use responseMimeType: "application/json"
+    const roadmap = JSON.parse(text) as GeneratedRoadmap;
+    
+    if (!roadmap.motivationalQuote || !roadmap.steps) {
+      throw new Error("Invalid response format");
     }
-  } catch (error) {
+    
+    return roadmap;
+  } catch (error: any) {
     console.error("Gemini API Error:", error);
-    throw error;
+    throw new Error(error.message || "Failed to generate roadmap.");
   }
 };
